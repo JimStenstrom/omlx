@@ -193,7 +193,7 @@ class BaseBenchmark(ABC):
                 max(max_tokens, THINKING_MIN_TOKENS), THINKING_MAX_TOKENS
             )
         kwargs["max_tokens"] = max_tokens
-        kwargs["temperature"] = 0.0
+        kwargs.setdefault("temperature", 0.0)
         kwargs["presence_penalty"] = 0.0
         kwargs["repetition_penalty"] = 1.0
         # Merge enable_thinking into any existing chat_template_kwargs

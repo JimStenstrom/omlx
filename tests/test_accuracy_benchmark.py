@@ -241,3 +241,96 @@ class TestRunAccuracyBenchmark:
 
         # Should have stopped early
         assert len(run.results) == 0
+
+
+class TestPerModelTemperature:
+    """Tests for issue #606: per-model temperature must be honoured by the accuracy benchmark."""
+
+    @pytest.mark.asyncio
+    async def test_per_model_temperature_forwarded_to_evaluator(self):
+        """sampling_kwargs passed to evaluator.run must include per-model temperature."""
+        from omlx.model_settings import ModelSettings
+
+        req = AccuracyBenchmarkRequest(
+            model_id="test-model",
+            benchmarks={"mmlu": 10},
+        )
+        run = create_run(req)
+
+        mock_engine = AsyncMock()
+
+        mock_settings = ModelSettings(temperature=0.7)
+        mock_settings_manager = MagicMock()
+        mock_settings_manager.get_settings = MagicMock(return_value=mock_settings)
+
+        mock_pool = MagicMock()
+        mock_pool.get_loaded_model_ids = MagicMock(return_value=[])
+        mock_pool.get_engine = AsyncMock(return_value=mock_engine)
+        mock_pool._unload_engine = AsyncMock()
+        mock_pool._settings_manager = mock_settings_manager
+
+        captured_kwargs = {}
+
+        mock_result = MagicMock()
+        mock_result.benchmark_name = "mmlu"
+        mock_result.accuracy = 0.5
+        mock_result.total_questions = 2
+        mock_result.correct_count = 1
+        mock_result.time_seconds = 0.1
+        mock_result.category_scores = None
+        mock_result.thinking_used = False
+
+        mock_evaluator = MagicMock()
+        mock_evaluator.load_dataset = AsyncMock(return_value=[{"id": "1"}])
+
+        async def capture_run(engine, items, on_progress, batch_size, sampling_kwargs, enable_thinking):
+            captured_kwargs.update(sampling_kwargs or {})
+            return mock_result
+
+        mock_evaluator.run = capture_run
+        mock_bench_cls = MagicMock(return_value=mock_evaluator)
+
+        with patch.dict("omlx.eval.BENCHMARKS", {"mmlu": mock_bench_cls}, clear=True):
+            await run_accuracy_benchmark(run, mock_pool)
+
+        assert "temperature" in captured_kwargs, (
+            "Per-model temperature was not forwarded into sampling_kwargs"
+        )
+        assert captured_kwargs["temperature"] == 0.7
+
+    def test_eval_single_respects_temperature_in_sampling_kwargs(self):
+        """_eval_single must not overwrite a temperature already in sampling_kwargs."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from omlx.eval.mmlu import MMLUBenchmark
+
+        bench = MMLUBenchmark()
+        captured_kwargs = {}
+
+        async def fake_chat(**kwargs):
+            captured_kwargs.update(kwargs)
+            return MagicMock(text="A")
+
+        mock_engine = MagicMock()
+        mock_engine.chat = fake_chat
+        mock_engine.model_type = "llm"
+
+        item = {
+            "question": "What is 2+2?",
+            "choices": ["1", "2", "3", "4"],
+            "answer": 3,
+            "subject": "math",
+        }
+
+        async def run():
+            return await bench._eval_single(
+                mock_engine, item, 0,
+                sampling_kwargs={"temperature": 0.5},
+                enable_thinking=False,
+            )
+
+        asyncio.run(run())
+
+        assert captured_kwargs.get("temperature") == 0.5, (
+            "_eval_single overwrote the per-model temperature with 0.0"
+        )

@@ -355,6 +355,8 @@ async def run_accuracy_benchmark(
         sampling_kwargs = {}
         if engine_pool._settings_manager is not None:
             ms = engine_pool._settings_manager.get_settings(request.model_id)
+            if ms.temperature is not None:
+                sampling_kwargs["temperature"] = ms.temperature
             if ms.top_p is not None:
                 sampling_kwargs["top_p"] = ms.top_p
             if ms.top_k is not None:
