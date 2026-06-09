@@ -756,6 +756,11 @@ def raise_if_prefill_exceeds(
     same math ``Scheduler.preflight_or_raise`` uses. No-op when the guard is
     disabled, no limit is set, the monitor is missing, or the request fits.
     Maps to HTTP 400 via the server's ``prefill_memory_exceeded_handler``.
+
+    ``cached_tokens`` means prompt KV *already resident in current memory*
+    (e.g. the scheduler's paged prefix cache) — not merely "tokens that hit
+    a cache". A cache whose hits re-allocate KV (DFlash prefix snapshots)
+    must pass 0.
     """
     if not prefill_memory_guard:
         return

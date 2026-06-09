@@ -656,6 +656,12 @@ class DFlashEngine(BaseEngine):
                 type(e).__name__,
             )
             return
+        # Deliberately no cached_tokens: a DFlash prefix-cache hit
+        # *reconstructs* the matched KV into active memory (dflash_mlx
+        # ``hydrate_target_cache`` clones every array), so the full prompt's
+        # KV is allocated this request — unlike the scheduler's resident
+        # paged cache. Subtracting hit tokens here would under-count and
+        # defeat the OOM guard.
         self._prefill_guard.preflight_or_raise(
             num_prompt_tokens=num_tokens, request_id=request_id
         )
@@ -691,6 +697,9 @@ class DFlashEngine(BaseEngine):
                 type(e).__name__,
             )
             return
+        # Deliberately no cached_tokens — see preflight_chat: a prefix-cache
+        # hit reconstructs KV into active memory, so the full prompt is
+        # charged.
         self._prefill_guard.preflight_or_raise(
             num_prompt_tokens=num_tokens, request_id=request_id
         )
