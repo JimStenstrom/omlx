@@ -96,16 +96,17 @@ class _DFlashPrefillGuard:
         self,
         *,
         num_prompt_tokens: int,
-        cached_tokens: int = 0,
         request_id: str | None = None,
     ) -> None:
+        # Deliberately no cached_tokens parameter: a DFlash prefix-cache hit
+        # reconstructs the matched KV into active memory, so the full prompt
+        # must always be charged (see DFlashEngine.preflight_chat).
         raise_if_prefill_exceeds(
             self.memory_monitor,
             prefill_memory_guard=self._prefill_memory_guard,
             hard_limit_bytes=self._memory_hard_limit_bytes,
             prefill_step_size=self._prefill_step_size,
             num_prompt_tokens=num_prompt_tokens,
-            cached_tokens=cached_tokens,
             request_id=request_id,
         )
 

@@ -19,7 +19,11 @@ import pytest
 
 from omlx.engine.dflash import DFlashEngine, _DFlashPrefillGuard
 from omlx.exceptions import PrefillMemoryExceededError
-from omlx.memory_monitor import MemoryMonitor, set_model_info_from_model
+from omlx.memory_monitor import (
+    MemoryMonitor,
+    raise_if_prefill_exceeds,
+    set_model_info_from_model,
+)
 
 
 class _ModelConfig:
@@ -117,12 +121,32 @@ def test_preflight_noop_when_hard_limit_zero():
     guard.preflight_or_raise(num_prompt_tokens=65536)  # no exception
 
 
-def test_preflight_noop_when_fully_cached():
+def test_shared_helper_noop_when_fully_cached():
+    """The fully-cached no-op belongs to ``raise_if_prefill_exceeds`` (for
+    engines whose caches keep KV resident); the DFlash guard itself has no
+    ``cached_tokens`` parameter."""
+    monitor = MemoryMonitor(max_kv_cache_memory=None, eviction_enabled=False)
+    set_model_info_from_model(monitor, _make_target_model())
+    # new_tokens == 0 → nothing to prefill → no exception.
+    raise_if_prefill_exceeds(
+        monitor,
+        prefill_memory_guard=True,
+        hard_limit_bytes=1,
+        prefill_step_size=2048,
+        num_prompt_tokens=1000,
+        cached_tokens=1000,
+    )
+
+
+def test_guard_rejects_cached_tokens():
+    """The narrowed signature is deliberate: a DFlash prefix-cache hit
+    reconstructs KV into active memory, so accepting a hit count here would
+    under-count the prefill peak and defeat the OOM guard."""
     guard = _make_guard()
     guard._prefill_memory_guard = True
     guard._memory_hard_limit_bytes = 1
-    # new_tokens == 0 → nothing to prefill.
-    guard.preflight_or_raise(num_prompt_tokens=1000, cached_tokens=1000)
+    with pytest.raises(TypeError):
+        guard.preflight_or_raise(num_prompt_tokens=1000, cached_tokens=1000)
 
 
 def test_preflight_noop_when_no_dims():
