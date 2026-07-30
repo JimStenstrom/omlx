@@ -4158,7 +4158,12 @@ class VLMBatchedEngine(BaseEngine):
             return self._engine.get_cache_stats()
         return None
 
-    async def abort_all_requests(self) -> int:
+    async def abort_all_requests(
+        self,
+        error_message: str | None = None,
+        error_code: str = "prefill_memory_aborted",
+        reason: str = "due to memory pressure",
+    ) -> int:
         """Abort all active requests."""
         if self.is_diffusion_model:
             cancel_events = list(getattr(self, "_diffusion_cancel_events", ()))
@@ -4166,5 +4171,7 @@ class VLMBatchedEngine(BaseEngine):
                 cancel_event.set()
             return len(cancel_events)
         if self._engine and self._engine.engine:
-            return await self._engine.engine.abort_all_requests()
+            return await self._engine.engine.abort_all_requests(
+                error_message=error_message, error_code=error_code, reason=reason
+            )
         return 0
