@@ -891,6 +891,77 @@ class TestDiscoverModels:
         assert "sharded" in models
         assert "incomplete model" not in caplog.text
 
+    def test_discover_stale_index_complete_other_shards_registers(
+        self, tmp_path, caplog
+    ):
+        """A repo shipping an index left over from a DIFFERENT sharding (none
+        of its referenced files exist) over a complete on-disk shard set is
+        stale-index, not incomplete-download: register, warn (real case:
+        mlx-community/Qwen3-Embedding-8B-mxfp8, 4-shard index over 2 shards)."""
+        model_dir = tmp_path / "stale-index"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(json.dumps({"model_type": "llama"}))
+        index = {
+            "weight_map": {
+                f"layer.{i}": f"model-0000{i}-of-00004.safetensors"
+                for i in range(1, 5)
+            }
+        }
+        (model_dir / "model.safetensors.index.json").write_text(json.dumps(index))
+        (model_dir / "model-00001-of-00002.safetensors").write_bytes(b"0" * 1000)
+        (model_dir / "model-00002-of-00002.safetensors").write_bytes(b"0" * 1000)
+
+        with caplog.at_level(logging.WARNING):
+            models = discover_models(tmp_path)
+
+        assert "stale-index" in models
+        assert "stale" in caplog.text
+        assert "incomplete model" not in caplog.text
+
+    def test_discover_stale_index_no_weights_skips(self, tmp_path, caplog):
+        """config.json + index landed first, zero shards on disk (interrupted
+        before the first shard finished): still skipped as incomplete."""
+        model_dir = tmp_path / "no-weights"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(json.dumps({"model_type": "llama"}))
+        index = {
+            "weight_map": {
+                "layer.a": "model-00001-of-00002.safetensors",
+                "layer.b": "model-00002-of-00002.safetensors",
+            }
+        }
+        (model_dir / "model.safetensors.index.json").write_text(json.dumps(index))
+
+        with caplog.at_level(logging.WARNING):
+            models = discover_models(tmp_path)
+
+        assert models == {}
+        assert "incomplete model 'no-weights'" in caplog.text
+
+    def test_discover_stale_index_partial_other_shards_skips(
+        self, tmp_path, caplog
+    ):
+        """Stale index AND the differently-numbered on-disk set has its own
+        gap: skip, reporting against the shards actually present."""
+        model_dir = tmp_path / "stale-partial"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(json.dumps({"model_type": "llama"}))
+        index = {
+            "weight_map": {
+                f"layer.{i}": f"model-0000{i}-of-00004.safetensors"
+                for i in range(1, 5)
+            }
+        }
+        (model_dir / "model.safetensors.index.json").write_text(json.dumps(index))
+        (model_dir / "model-00001-of-00002.safetensors").write_bytes(b"0" * 1000)
+
+        with caplog.at_level(logging.WARNING):
+            models = discover_models(tmp_path)
+
+        assert models == {}
+        assert "incomplete model 'stale-partial'" in caplog.text
+        assert "model-00002-of-00002.safetensors" in caplog.text
+
     def test_discover_complete_sharded_model_without_index(self, tmp_path, caplog):
         """A full 1..N shard set with no index file registers normally."""
         model_dir = tmp_path / "sharded"

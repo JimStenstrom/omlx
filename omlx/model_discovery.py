@@ -1082,6 +1082,7 @@ def _missing_weight_shards(model_dir: Path) -> tuple[int, list[str], str] | None
     None when the directory is complete or makes no shard promises.
     """
     idx_path = model_dir / "model.safetensors.index.json"
+    index_missing: tuple[int, list[str]] | None = None
     if idx_path.is_file():
         try:
             index = json.loads(idx_path.read_text())
@@ -1102,9 +1103,22 @@ def _missing_weight_shards(model_dir: Path) -> tuple[int, list[str], str] | None
                     if isinstance(v, str) and not (model_dir / v).is_file()
                 }
             )
-            if missing:
+            if not missing:
+                return None
+            referenced_count = len(
+                {v for v in weight_map.values() if isinstance(v, str)}
+            )
+            if len(missing) < referenced_count:
                 return len(missing), missing[:3], "model.safetensors.index.json"
-            return None
+            # Every shard the index references is absent. An interrupted
+            # download keeps the shards it already fetched, so
+            # zero-of-referenced is not that shape — it is a stale index
+            # describing a different sharding of the same checkpoint (seen
+            # in the wild: a 4-shard weight_map shipped over 2 actual
+            # shards). Loaders glob model*.safetensors and never consult
+            # the index, so fall through and judge by the shard files
+            # actually present.
+            index_missing = (len(missing), missing[:3])
 
     try:
         shard_names = [
@@ -1144,7 +1158,36 @@ def _missing_weight_shards(model_dir: Path) -> tuple[int, list[str], str] | None
                     f"{prefix}-{str(i).zfill(width)}-of-{total}.safetensors"
                 )
     if missing_count:
-        return missing_count, examples, "shard filename numbering (no index file)"
+        return (
+            missing_count,
+            examples,
+            (
+                "shard filename numbering (no shard referenced by the stale "
+                "index exists; judging by the shards present)"
+                if index_missing is not None
+                else "shard filename numbering (no index file)"
+            ),
+        )
+    if index_missing is not None:
+        if groups or (model_dir / "model.safetensors").is_file():
+            # A self-consistent complete shard set (or a consolidated
+            # single-file checkpoint) is present: the index is stale, the
+            # weights are whole. Register the model; loaders read the shard
+            # files directly and never consult the index.
+            n_missing, examples = index_missing
+            logger.warning(
+                f"Model at {model_dir} ships a stale "
+                f"model.safetensors.index.json: none of the {n_missing} "
+                f"shard(s) it references exist (e.g. {', '.join(examples)}), "
+                f"but the weight files present form a complete set — "
+                f"registering the model anyway."
+            )
+            return None
+        # No weight files at all: config + index landed first, shards did not
+        # (interrupted download before the first shard finished) — skip, and
+        # report against the only manifest available.
+        n_missing, examples = index_missing
+        return n_missing, examples, "model.safetensors.index.json"
     return None
 
 
