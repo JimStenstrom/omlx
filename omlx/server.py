@@ -4397,7 +4397,12 @@ async def stream_chat_completion(
     stream_content = True
     if has_tools:
         _content_filter = ToolCallStreamFilter(engine.tokenizer)
-        _thinking_filter = ToolCallStreamFilter(engine.tokenizer)
+        # The thinking channel never contains a separator-prefixed DSML
+        # block; holding trailing newlines would flush them as a late
+        # reasoning delta after the channel closed.
+        _thinking_filter = ToolCallStreamFilter(
+            engine.tokenizer, consume_dsml_separator=False
+        )
         if _content_filter.active:
             tool_filter = _content_filter
             thinking_filter = _thinking_filter
@@ -4824,7 +4829,12 @@ async def stream_anthropic_messages(
     thinking_filter = None
     if has_tools:
         _content_filter = ToolCallStreamFilter(engine.tokenizer)
-        _thinking_filter = ToolCallStreamFilter(engine.tokenizer)
+        # The thinking channel never contains a separator-prefixed DSML
+        # block; holding trailing newlines would flush them as a late
+        # reasoning delta after the channel closed.
+        _thinking_filter = ToolCallStreamFilter(
+            engine.tokenizer, consume_dsml_separator=False
+        )
         if _content_filter.active:
             tool_filter = _content_filter
             thinking_filter = _thinking_filter
@@ -4903,14 +4913,15 @@ async def stream_anthropic_messages(
                         content_delta = tool_filter.feed(content_delta)
                     if content_delta:
                         # When tools are requested AND we haven't yet opened
-                        # a text block, drop pure-whitespace deltas. Models
-                        # often emit a leading newline around <tool_call>
-                        # envelopes that tool_filter passes through
-                        # (whitespace isn't part of the envelope markers).
-                        # Without this guard, the `\n` opens a text block
-                        # that then holds only whitespace — surfacing as
-                        # a phantom empty-ish text block before the
-                        # tool_use blocks.
+                        # a text block, drop pure-whitespace deltas. Most
+                        # models emit a leading newline around <tool_call>
+                        # envelopes that tool_filter passes through (their
+                        # whitespace isn't part of the envelope markers;
+                        # DeepSeek V4's separator is, and the filter
+                        # consumes it itself). Without this guard, the `\n`
+                        # opens a text block that then holds only
+                        # whitespace — surfacing as a phantom empty-ish
+                        # text block before the tool_use blocks.
                         if (
                             not text_block_started
                             and kwargs.get("tools")
@@ -4991,7 +5002,14 @@ async def stream_anthropic_messages(
     # Flush any remaining buffered content from the tool-call filter
     if tool_filter:
         remaining = tool_filter.finish()
-        if remaining:
+        # Same guard as the delta path above: the filter can now flush
+        # held newlines here, and pure whitespace must not open a
+        # phantom text block.
+        if remaining and not (
+            not text_block_started
+            and kwargs.get("tools")
+            and not remaining.strip()
+        ):
             if not text_block_started:
                 if thinking_block_started:
                     yield create_content_block_stop_event(index=block_index)
@@ -6328,7 +6346,12 @@ async def stream_responses_api(
     stream_content = True
     if has_tools:
         _content_filter = ToolCallStreamFilter(engine.tokenizer)
-        _thinking_filter = ToolCallStreamFilter(engine.tokenizer)
+        # The thinking channel never contains a separator-prefixed DSML
+        # block; holding trailing newlines would flush them as a late
+        # reasoning delta after the channel closed.
+        _thinking_filter = ToolCallStreamFilter(
+            engine.tokenizer, consume_dsml_separator=False
+        )
         if _content_filter.active:
             tool_filter = _content_filter
             thinking_filter = _thinking_filter
